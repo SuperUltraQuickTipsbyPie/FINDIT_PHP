@@ -34,7 +34,7 @@ class SocketHandler implements MessageComponentInterface {
             // Broadcast to all connected users
             $response = json_encode([
                 'type' => 'TICKET_ADDED', 
-                'id' => $newId, 
+                'id' => $newId,  
                 'item' => $data->item, 
                 'lab' => $data->lab
             ]);
