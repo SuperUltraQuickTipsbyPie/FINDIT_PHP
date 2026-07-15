@@ -10,16 +10,14 @@ $limit = 6;
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $start = ($page - 1) * $limit;
 
-// --- NEW: PHP CANCEL LOGIC (Fixes the button not working) ---
+// --- PHP CANCEL LOGIC ---
 if (isset($_GET['action']) && $_GET['action'] == 'cancel_claim') {
     $id = $_GET['id'];
     $itemName = $_GET['item_name'] ?? 'Item';
     
-    // Reset item status and clear student data
     $stmt = $pdo->prepare("UPDATE items SET status='available', student_id=NULL, claim_message=NULL WHERE id=?");
     $stmt->execute([$id]);
     
-    // Log it in Audit Trail
     $logMsg = "Student cancelled claim for: " . $itemName;
     $logStmt = $pdo->prepare("INSERT INTO audit_logs (action_text) VALUES (?)");
     $logStmt->execute([$logMsg]);
@@ -28,13 +26,23 @@ if (isset($_GET['action']) && $_GET['action'] == 'cancel_claim') {
     exit();
 }
 
-// --- STUDENT CLAIM SUBMISSION ---
+// --- GUARANTEED PHP CLAIM SUBMISSION (Fixes the button issue) ---
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['submitClaim'])) {
     $id = $_POST['claimItemID'];
     $sid = $_POST['studentID'];
     $msg = $_POST['studentMsg'];
+    
+    // Explicitly update status to pending and save student info
     $stmt = $pdo->prepare("UPDATE items SET status='pending', student_id=?, claim_message=? WHERE id=?");
     $stmt->execute([$sid, $msg, $id]);
+    
+    // Log action to Audit Trail
+    $logMsg = "Student (" . htmlspecialchars($sid) . ") claimed item ID: " . $id;
+    $logStmt = $pdo->prepare("INSERT INTO audit_logs (action_text) VALUES (?)");
+    $logStmt->execute([$logMsg]);
+
+    header("Location: index.php");
+    exit();
 }
 
 // --- ADMIN EDIT LOGIC ---
@@ -64,9 +72,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['editID'])) {
 $search = $_GET['search'] ?? '';
 $whereSql = "WHERE status != 'claimed'";
 $params = [];
+
 if ($search) {
-    $whereSql .= " AND (item_name LIKE :s OR lab_room LIKE :s OR description LIKE :s)";
-    $params['s'] = "%$search%";
+    $whereSql .= " AND (item_name LIKE :s1 OR lab_room LIKE :s2 OR description LIKE :s3)";
+    $params['s1'] = "%$search%";
+    $params['s2'] = "%$search%";
+    $params['s3'] = "%$search%";
 }
 
 $countStmt = $pdo->prepare("SELECT count(*) FROM items $whereSql");
@@ -190,7 +201,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['itemImage']) && !isse
 
                     <?php if ($_SESSION['role'] == 'admin'): ?>
                         <?php if ($row['status'] == 'pending'): ?>
-                            <button class="btn btn-approve" onclick="openApproveModal(<?php echo $row['id']; ?>, '<?php echo addslashes($row['item_name']); ?>', '<?php echo $row['student_id'] ?? 'N/A'; ?>', '<?php echo addslashes($row['claim_message'] ?? 'No message'); ?>')">View Claim Info</button>
+                            <button class="btn btn-approve" onclick="openApproveModal(<?php echo $row['id']; ?>, '<?php echo addslashes($row['item_name']); ?>', '<?php echo $row['student_id'] ?? 'N/A'; ?>', '<?php echo addslashes($row['claim_message'] ?? ''); ?>')">View Claim Info</button>
                         <?php else: ?>
                             <button class="btn btn-outline" onclick="openEditModal(<?php echo $row['id']; ?>, '<?php echo addslashes($row['item_name']); ?>', '<?php echo addslashes($row['description']); ?>', '<?php echo $row['lab_room']; ?>')">Edit Details</button>
                         <?php endif; ?>
@@ -290,9 +301,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_FILES['itemImage']) && !isse
 
     function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
-    // --- BUTTON ACTIONS ---
+    // --- SUBMIT ACTIONS ---
+    document.getElementById('claimForm').onsubmit = function() {
+        try {
+            socket.send(JSON.stringify({ type: 'UPDATE_UI', item_name: currentName }));
+        } catch(e) { console.log('WebSocket offline, falling back to pure PHP refresh.'); }
+    };
 
-    // Updated: Redirects to the PHP cancel logic
     function executeCancelClaim() { 
         window.location.href = "index.php?action=cancel_claim&id=" + currentId + "&item_name=" + encodeURIComponent(currentName);
     }
